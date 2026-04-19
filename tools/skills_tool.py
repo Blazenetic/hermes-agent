@@ -582,11 +582,28 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
 
                 category = _get_category_from_path(skill_md)
 
+                # Extract tags and related_skills from frontmatter metadata
+                metadata = frontmatter.get("metadata", {})
+                if isinstance(metadata, dict):
+                    hermes_meta = metadata.get("hermes", {})
+                    tags = hermes_meta.get("tags", [])
+                    related_skills = hermes_meta.get("related_skills", [])
+                else:
+                    tags = []
+                    related_skills = []
+
+                # Also check top-level frontmatter for tags (some skills use this format)
+                if not tags and frontmatter.get("tags"):
+                    frontmatter_tags = frontmatter.get("tags", [])
+                    tags = frontmatter_tags if isinstance(frontmatter_tags, list) else [frontmatter_tags]
+
                 seen_names.add(name)
                 skills.append({
                     "name": name,
                     "description": description,
                     "category": category,
+                    "tags": tags,
+                    "related_skills": related_skills,
                 })
 
             except (UnicodeDecodeError, PermissionError) as e:
@@ -644,7 +661,7 @@ def _load_category_description(category_dir: Path) -> Optional[str]:
         return None
 
 
-def skills_list(category: str = None, task_id: str = None) -> str:
+def skills_list(category: str = None, task_id: str = None, search: str = None, tags: str = None) -> str:
     """
     List all available skills (progressive disclosure tier 1 - minimal metadata).
 
@@ -654,9 +671,11 @@ def skills_list(category: str = None, task_id: str = None) -> str:
     Args:
         category: Optional category filter (e.g., "mlops")
         task_id: Optional task identifier used to probe the active backend
+        search: Optional keyword search across skill name and description
+        tags: Optional comma-separated tags to filter by (e.g., "delegation,workflow")
 
     Returns:
-        JSON string with minimal skill info: name, description, category
+        JSON string with skill info: name, description, category, tags, related_skills
     """
     try:
         if not SKILLS_DIR.exists():
@@ -688,6 +707,27 @@ def skills_list(category: str = None, task_id: str = None) -> str:
         # Filter by category if specified
         if category:
             all_skills = [s for s in all_skills if s.get("category") == category]
+
+        # Filter by search query (keyword search across name and description)
+        if search:
+            search_lower = search.lower()
+            all_skills = [
+                s for s in all_skills
+                if search_lower in s.get("name", "").lower()
+                or search_lower in s.get("description", "").lower()
+            ]
+
+        # Filter by tags (comma-separated list)
+        if tags:
+            tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
+            if tag_list:
+                all_skills = [
+                    s for s in all_skills
+                    if any(
+                        tag in [t.lower() for t in s.get("tags", [])]
+                        for tag in tag_list
+                    )
+                ]
 
         # Sort by category then name
         all_skills.sort(key=lambda s: (s.get("category") or "", s["name"]))
@@ -1366,13 +1406,21 @@ if __name__ == "__main__":
 
 SKILLS_LIST_SCHEMA = {
     "name": "skills_list",
-    "description": "List available skills (name + description). Use skill_view(name) to load full content.",
+    "description": "List available skills (name + description + tags). Use skill_view(name) to load full content. Supports filtering by category, keyword search, and tags.",
     "parameters": {
         "type": "object",
         "properties": {
             "category": {
                 "type": "string",
-                "description": "Optional category filter to narrow results",
+                "description": "Optional category filter to narrow results (e.g., 'github', 'mlops', 'productivity')",
+            },
+            "search": {
+                "type": "string",
+                "description": "Optional keyword search across skill name and description",
+            },
+            "tags": {
+                "type": "string",
+                "description": "Optional comma-separated tags to filter by (e.g., 'delegation,workflow' or 'planning,implementation')",
             }
         },
         "required": [],
@@ -1403,7 +1451,10 @@ registry.register(
     toolset="skills",
     schema=SKILLS_LIST_SCHEMA,
     handler=lambda args, **kw: skills_list(
-        category=args.get("category"), task_id=kw.get("task_id")
+        category=args.get("category"),
+        task_id=kw.get("task_id"),
+        search=args.get("search"),
+        tags=args.get("tags"),
     ),
     check_fn=check_skills_requirements,
     emoji="📚",

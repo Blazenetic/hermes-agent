@@ -580,5 +580,113 @@ registry.register(
 )
 
 
+# ----------------------------------------------------------------------
+# memory_search: Search across memory entries to prevent duplicates
+# ----------------------------------------------------------------------
+def memory_search(query: str, target: str = None) -> str:
+    """
+    Search memory entries for a query string.
+
+    Use this before adding a new memory entry to check for duplicates or
+    similar existing entries.
+
+    Args:
+        query: Search string to find in memory entries (case-insensitive)
+        target: Optional filter - "memory", "user", or None for both
+
+    Returns:
+        JSON string with matching entries and metadata
+    """
+    mem_dir = get_memory_dir()
+    results = {
+        "memory": [],
+        "user": []
+    }
+    targets_to_search = []
+
+    if target == "user":
+        targets_to_search = ["user"]
+    elif target == "memory":
+        targets_to_search = ["memory"]
+    else:
+        targets_to_search = ["memory", "user"]
+
+    query_lower = query.lower()
+
+    for tgt in targets_to_search:
+        path = mem_dir / "USER.md" if tgt == "user" else mem_dir / "MEMORY.md"
+        if path.exists():
+            try:
+                raw = path.read_text(encoding="utf-8")
+                if raw.strip():
+                    entries = [e.strip() for e in raw.split(ENTRY_DELIMITER)]
+                    for entry in entries:
+                        if entry and query_lower in entry.lower():
+                            # Include first 100 chars of matching entry as preview
+                            preview = entry[:100] + ("..." if len(entry) > 100 else "")
+                            results[tgt].append({
+                                "preview": preview,
+                                "full_entry": entry,
+                                "length": len(entry),
+                            })
+            except (OSError, IOError) as e:
+                logger.debug(f"Error reading memory file {path}: {e}")
+
+    total_matches = len(results["memory"]) + len(results["user"])
+
+    return json.dumps({
+        "success": True,
+        "query": query,
+        "matches": results,
+        "total_matches": total_matches,
+        "hint": "Use these results to check for duplicates before adding new memory entries",
+    }, ensure_ascii=False)
+
+
+# Schema for memory_search tool
+MEMORY_SEARCH_SCHEMA = {
+    "name": "memory_search",
+    "description": "Search memory entries for a query string. Use before adding a new memory entry to check for duplicates or similar existing entries. Searches both 'memory' (your personal notes) and 'user' (user profile) stores.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search string to find in memory entries (case-insensitive)",
+            },
+            "target": {
+                "type": "string",
+                "enum": ["memory", "user"],
+                "description": "Optional filter: 'memory' for personal notes, 'user' for user profile, or omit for both",
+            }
+        },
+        "required": ["query"],
+    },
+}
+
+
+# Register memory_search tool
+def check_memory_search_requirements():
+    """Check that memory directory is accessible."""
+    try:
+        get_memory_dir().mkdir(parents=True, exist_ok=True)
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+registry.register(
+    name="memory_search",
+    toolset="memory",
+    schema=MEMORY_SEARCH_SCHEMA,
+    handler=lambda args, **kw: memory_search(
+        query=args.get("query", ""),
+        target=args.get("target"),
+    ),
+    check_fn=check_memory_search_requirements,
+    emoji="🔍",
+)
+
+
 
 
